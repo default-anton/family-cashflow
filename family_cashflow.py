@@ -130,6 +130,7 @@ class TransactionProcessor:
             raise UnsupportedBankError("This file format is not supported yet.")
 
         df['Owner'] = owner
+        df['Institution'] = bank_format
 
         return df.sort_values('Date', ascending=False)
 
@@ -172,7 +173,7 @@ def main():
             print("Error: Month must be in YYYY-MM format (e.g., 2024-01)")
             return
 
-    transactions = transactions[['Date', 'Owner', 'Description', 'Amount']]
+    transactions = transactions[['Date', 'Owner', 'Institution', 'Description', 'Amount']]
     transactions = transactions.sort_values('Date', ascending=False)
 
     owners = '_'.join(sorted([owner.lower() for owner in transactions['Owner'].unique()]))
