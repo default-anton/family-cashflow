@@ -202,6 +202,8 @@ class TransactionProcessor:
 
         # Process amounts and descriptions
         df['Amount'] = df.apply(convert_amount, axis=1)
+        # Make outgoing transactions negative
+        df.loc[df['Direction'] == 'OUT', 'Amount'] *= -1
         df['Description'] = df['Source name'] + ' → ' + df['Target name']
         df['Currency'] = 'CAD'
 
