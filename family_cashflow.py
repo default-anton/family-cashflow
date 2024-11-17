@@ -10,16 +10,19 @@ class UnsupportedBankError(Exception):
     pass
 
 class TransactionProcessor:
+    def __init__(self, owners):
+        """Initialize with a list of owners."""
+        self.owners = owners
+
     def _detect_owner(self, file_path):
         """Detect the owner based on filename."""
         filename = file_path.lower()
 
-        if 'anton' in filename:
-            return 'Anton'
-        elif 'anna' in filename:
-            return 'Anna'
+        for owner in self.owners:
+            if owner.lower() in filename:
+                return owner
 
-        raise ValueError(f"Could not detect owner (Anton/Anna) from filename: {file_path}")
+        raise ValueError(f"Could not detect owner ({', '.join(self.owners)}) from filename: {file_path}")
 
     def _detect_bank_format(self, file_path):
         """Detect the bank format based on CSV structure."""
@@ -138,9 +141,10 @@ def main():
     parser = argparse.ArgumentParser(description='Process bank transactions')
     parser.add_argument('file_paths', nargs='+', help='Paths to the CSV files')
     parser.add_argument('--month', help='Month to filter transactions (YYYY-MM format)')
+    parser.add_argument('--owners', nargs='+', required=True, help='List of owners to detect in filenames')
     args = parser.parse_args()
 
-    processor = TransactionProcessor()
+    processor = TransactionProcessor(args.owners)
     all_transactions = []
 
     for file_path in args.file_paths:
