@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import requests
 import pandas as pd
+from numbers_parser import Document
 
 class UnsupportedBankError(Exception):
     pass
@@ -15,6 +16,28 @@ class TransactionProcessor:
     def __init__(self, owners):
         """Initialize with a list of owners."""
         self.owners = owners
+        self.categories_df = None
+
+    def load_categories(self, numbers_file):
+        """Load transaction categories from a Numbers file."""
+        doc = Document(numbers_file)
+        sheets = doc.sheets
+        tables = sheets[0].tables
+        data = tables[0].rows(values_only=True)
+        self.categories_df = pd.DataFrame(data[1:], columns=data[0])
+        self.categories_df['Description'] = self.categories_df['Description'].str.lower()
+
+    def categorize_transaction(self, description):
+        """Categorize a transaction based on its description."""
+        if self.categories_df is None:
+            return ''
+
+        description = description.lower()
+        for _, row in self.categories_df.iterrows():
+            if row['Description'] in description:
+                return row['Category']
+
+        return ''
 
     def _detect_owner(self, file_path):
         """Detect the owner based on filename."""
@@ -68,28 +91,6 @@ class TransactionProcessor:
 
         return None
 
-    def _filter_internal_transfers(self, df):
-        """Remove matching internal transfer transactions."""
-        indices_to_remove = set()
-
-        for date in df['Date'].unique():
-            date_df = df[df['Date'] == date]
-            outgoing_mask = date_df['Description'].str.contains('WWW TRF DDA', case=False, na=False)
-            incoming_mask = date_df['Description'].str.contains('Transfer WWW TRANSFER', case=False, na=False)
-            outgoing = date_df[outgoing_mask]
-            incoming = date_df[incoming_mask]
-
-            # Match transfers with same absolute amount
-            for _, out_row in outgoing.iterrows():
-                amount = abs(out_row['Amount'])
-                matching_in = incoming[incoming['Amount'] == amount]
-
-                if not matching_in.empty:
-                    indices_to_remove.add(out_row.name)
-                    indices_to_remove.add(matching_in.iloc[0].name)
-
-        return df[~df.index.isin(indices_to_remove)]
-
     def _read_and_process_rbc(self, file_path):
         df = pd.read_csv(
             file_path,
@@ -103,7 +104,6 @@ class TransactionProcessor:
         df['Amount'] = df['CAD$']
         df['Currency'] = 'CAD'
         result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
-        result = self._filter_internal_transfers(result)
 
         return result
 
@@ -123,7 +123,6 @@ class TransactionProcessor:
         df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
         df['Currency'] = 'CAD'
         result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
-        result = self._filter_internal_transfers(result)
 
         return result
 
@@ -225,17 +224,21 @@ class TransactionProcessor:
 
         df['Owner'] = owner
         df['Institution'] = bank_format
+        df['Category'] = df['Description'].apply(self.categorize_transaction)
 
-        return df.sort_values('Date', ascending=False)
+        return df.sort_values('Date', ascending=True)
 
 def main():
     parser = argparse.ArgumentParser(description='Process bank transactions')
     parser.add_argument('file_paths', nargs='+', help='Paths to the CSV files')
     parser.add_argument('--month', help='Month to filter transactions (YYYY-MM format)')
     parser.add_argument('--owners', nargs='+', required=True, help='List of owners to detect in filenames')
+    parser.add_argument('--categories', help='Path to the transaction categories Numbers file')
     args = parser.parse_args()
 
     processor = TransactionProcessor(args.owners)
+    if args.categories:
+        processor.load_categories(args.categories)
     all_transactions = []
 
     for file_path in args.file_paths:
@@ -268,8 +271,8 @@ def main():
             print("Error: Month must be in YYYY-MM format (e.g., 2024-01)")
             return
 
-    transactions = transactions[['Date', 'Owner', 'Institution', 'Description', 'Amount', 'Currency']]
-    transactions = transactions.sort_values('Date', ascending=False)
+    transactions = transactions[['Date', 'Owner', 'Institution', 'Description', 'Amount', 'Currency', 'Category']]
+    transactions = transactions.sort_values('Date', ascending=True)
 
     owners = '_'.join(sorted([owner.lower() for owner in transactions['Owner'].unique()]))
     output_filename = f"{owners}_{'all' if not args.month else args.month}_processed_family_cashflow.csv"
