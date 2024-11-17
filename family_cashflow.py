@@ -80,13 +80,28 @@ class TransactionProcessor:
 
 def main():
     parser = argparse.ArgumentParser(description='Process bank transactions')
-    parser.add_argument('file_path', help='Path to the CSV file')
+    parser.add_argument('file_paths', nargs='+', help='Paths to the CSV files')
     parser.add_argument('--owner', default='Anton', choices=['Anton', 'Anna'], help='Owner of the transactions (Anton or Anna)')
     parser.add_argument('--month', help='Month to filter transactions (YYYY-MM format)')
     args = parser.parse_args()
 
     processor = TransactionProcessor(args.owner)
-    transactions = processor.read_and_process(args.file_path)
+    all_transactions = []
+
+    for file_path in args.file_paths:
+        try:
+            transactions = processor.read_and_process(file_path)
+            transactions['Owner'] = args.owner
+            all_transactions.append(transactions)
+        except Exception as e:
+            print(f"Error processing {file_path}: {e}")
+            continue
+
+    if not all_transactions:
+        print("No transactions were successfully processed")
+        return
+
+    transactions = pd.concat(all_transactions, ignore_index=True)
 
     if args.month:
         try:
@@ -104,12 +119,14 @@ def main():
             print("Error: Month must be in YYYY-MM format (e.g., 2024-01)")
             return
 
-    transactions['Owner'] = args.owner
     transactions = transactions[['Date', 'Owner', 'Description', 'Amount']]
+    transactions = transactions.sort_values('Date', ascending=False)
     
-    # Generate output filename
-    base_path = args.file_path.rsplit('.', 1)[0]
-    output_path = f"{base_path}_{'all' if not args.month else args.month}_processed.csv"
+    # Generate output filename based on the first input file
+    base_path = args.file_paths[0].rsplit('.', 1)[0]
+    file_count = len(args.file_paths)
+    file_suffix = '' if file_count == 1 else f'_plus_{file_count-1}'
+    output_path = f"{base_path}{file_suffix}_{'all' if not args.month else args.month}_processed.csv"
     transactions.to_csv(output_path, index=False)
 
     print(f"Transactions saved to {output_path}")
