@@ -3,7 +3,9 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from datetime import timedelta
 
+import requests
 import pandas as pd
 
 class UnsupportedBankError(Exception):
@@ -26,7 +28,7 @@ class TransactionProcessor:
 
     def _detect_bank_format(self, file_path):
         """Detect the bank format based on CSV structure."""
-        # Try reading as RBC first (with headers)
+        # Try reading as RBC or Wise (with headers)
         try:
             df_header = pd.read_csv(
                 file_path,
@@ -35,6 +37,10 @@ class TransactionProcessor:
                 quoting=csv.QUOTE_MINIMAL,
                 skipinitialspace=True,
             )
+
+            wise_columns = {"ID", "Status", "Direction", "Source amount (after fees)", "Target amount (after fees)"}
+            if wise_columns.issubset(df_header.columns):
+                return "WISE"
 
             rbc_columns = {"Description 1", "Description 2", "Transaction Date", "CAD$"}
             if rbc_columns.issubset(df_header.columns):
@@ -121,6 +127,88 @@ class TransactionProcessor:
 
         return result
 
+    def _get_exchange_rates(self, start_date, end_date, currencies):
+        """Fetch exchange rates from Bank of Canada for the given date range and currencies."""
+        # Remove CAD and create FX codes for Bank of Canada API
+        currencies = set(currencies) - {'CAD'}
+        if not currencies:
+            return {}
+
+        fx_codes = [f"FX{curr}CAD" for curr in currencies]
+        url = f"https://www.bankofcanada.ca/valet/observations/{','.join(fx_codes)}/json"
+        params = {
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d'),
+            'order_dir': 'asc'
+        }
+
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            rates = {}
+            for obs in data['observations']:
+                date = obs['d']
+                rates[date] = {
+                    curr: float(obs[f'FX{curr}CAD']['v'])
+                    for curr in currencies
+                    if f'FX{curr}CAD' in obs
+                }
+            return rates
+        except Exception as e:
+            print(f"Warning: Failed to fetch exchange rates: {e}")
+            return {}
+
+    def _find_closest_previous_date(self, date, exchange_rates):
+        """Find the closest previous date in exchange_rates."""
+        if not exchange_rates:
+            return None
+
+        previous_dates = [d for d in exchange_rates if d <= date]
+        return max(previous_dates) if previous_dates else None
+
+    def _read_and_process_wise(self, file_path):
+        """Process Wise transaction history CSV file."""
+        df = pd.read_csv(
+            file_path,
+            index_col=False,
+            quoting=csv.QUOTE_MINIMAL,
+            skipinitialspace=True
+        )
+
+        df['Date'] = pd.to_datetime(df['Finished on']).dt.strftime('%Y-%m-%d')
+        dates = pd.to_datetime(df['Date'].unique())
+        start_date = min(dates) - timedelta(days=7)
+        end_date = max(dates) + timedelta(days=1)
+
+        # Get unique currencies from both source and target
+        currencies = set(df['Source currency'].unique()) | set(df['Target currency'].unique())
+        exchange_rates = self._get_exchange_rates(start_date, end_date, currencies)
+
+        def convert_amount(row):
+            target_currency = row['Target currency']
+            target_amount = row['Target amount (after fees)']
+            if target_currency == 'CAD':
+                return target_amount
+
+            closest_date = self._find_closest_previous_date(row['Date'], exchange_rates)
+
+            assert closest_date is not None and target_currency in exchange_rates[closest_date], \
+              f"CAD exchange rate not found for {target_currency} on {row['Date']}. Closest date: {closest_date}"
+
+            rate = exchange_rates[closest_date][target_currency]
+            return target_amount * rate
+
+        # Process amounts and descriptions
+        df['Amount'] = df.apply(convert_amount, axis=1)
+        df['Description'] = df['Source name'] + ' → ' + df['Target name']
+        df['Currency'] = 'CAD'
+
+        # Select and return relevant columns
+        result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
+        return result
+
     def read_and_process(self, file_path):
         """Main interface to read and process bank transaction files."""
         bank_format = self._detect_bank_format(file_path)
@@ -131,6 +219,8 @@ class TransactionProcessor:
             df = self._read_and_process_rbc(file_path)
         elif bank_format == "CIBC":
             df = self._read_and_process_cibc(file_path)
+        elif bank_format == "WISE":
+            df = self._read_and_process_wise(file_path)
         else:
             raise UnsupportedBankError("This file format is not supported yet.")
 
