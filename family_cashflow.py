@@ -2,14 +2,24 @@ import csv
 import argparse
 import subprocess
 import sys
+from pathlib import Path
+
 import pandas as pd
 
 class UnsupportedBankError(Exception):
     pass
 
 class TransactionProcessor:
-    def __init__(self, owner):
-        self.owner = owner
+    def _detect_owner(self, file_path):
+        """Detect the owner based on filename."""
+        filename = file_path.lower()
+
+        if 'anton' in filename:
+            return 'Anton'
+        elif 'anna' in filename:
+            return 'Anna'
+
+        raise ValueError(f"Could not detect owner (Anton/Anna) from filename: {file_path}")
 
     def _detect_bank_format(self, file_path):
         """Detect the bank format based on CSV headers."""
@@ -68,6 +78,7 @@ class TransactionProcessor:
     def read_and_process(self, file_path):
         """Main interface to read and process bank transaction files."""
         bank_format = self._detect_bank_format(file_path)
+        owner = self._detect_owner(file_path)
 
         df = None
         if bank_format == "RBC":
@@ -76,22 +87,22 @@ class TransactionProcessor:
         if df is None:
             raise UnsupportedBankError("This file format is not supported yet.")
 
+        df['Owner'] = owner
+
         return df.sort_values('Date', ascending=False)
 
 def main():
     parser = argparse.ArgumentParser(description='Process bank transactions')
     parser.add_argument('file_paths', nargs='+', help='Paths to the CSV files')
-    parser.add_argument('--owner', default='Anton', choices=['Anton', 'Anna'], help='Owner of the transactions (Anton or Anna)')
     parser.add_argument('--month', help='Month to filter transactions (YYYY-MM format)')
     args = parser.parse_args()
 
-    processor = TransactionProcessor(args.owner)
+    processor = TransactionProcessor()
     all_transactions = []
 
     for file_path in args.file_paths:
         try:
             transactions = processor.read_and_process(file_path)
-            transactions['Owner'] = args.owner
             all_transactions.append(transactions)
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
@@ -121,16 +132,14 @@ def main():
 
     transactions = transactions[['Date', 'Owner', 'Description', 'Amount']]
     transactions = transactions.sort_values('Date', ascending=False)
-    
-    # Generate output filename based on the first input file
-    base_path = args.file_paths[0].rsplit('.', 1)[0]
-    file_count = len(args.file_paths)
-    file_suffix = '' if file_count == 1 else f'_plus_{file_count-1}'
-    output_path = f"{base_path}{file_suffix}_{'all' if not args.month else args.month}_processed.csv"
+
+    owners = '_'.join(sorted([owner.lower() for owner in transactions['Owner'].unique()]))
+    output_filename = f"{owners}_{'all' if not args.month else args.month}_processed_family_cashflow.csv"
+    output_path = Path(args.file_paths[0]).parent.joinpath(output_filename)
     transactions.to_csv(output_path, index=False)
 
     print(f"Transactions saved to {output_path}")
-    
+
     if sys.platform == "darwin":
         try:
             subprocess.run(["open", output_path], check=True)
