@@ -22,18 +22,40 @@ class TransactionProcessor:
         raise ValueError(f"Could not detect owner (Anton/Anna) from filename: {file_path}")
 
     def _detect_bank_format(self, file_path):
-        """Detect the bank format based on CSV headers."""
-        df_header = pd.read_csv(
-            file_path,
-            nrows=0,
-            index_col=False,
-            quoting=csv.QUOTE_MINIMAL,
-            skipinitialspace=True,
-        )
+        """Detect the bank format based on CSV structure."""
+        # Try reading as RBC first (with headers)
+        try:
+            df_header = pd.read_csv(
+                file_path,
+                nrows=0,
+                index_col=False,
+                quoting=csv.QUOTE_MINIMAL,
+                skipinitialspace=True,
+            )
 
-        rbc_columns = {"Description 1", "Description 2", "Transaction Date", "CAD$"}
-        if rbc_columns.issubset(df_header.columns):
-            return "RBC"
+            rbc_columns = {"Description 1", "Description 2", "Transaction Date", "CAD$"}
+            if rbc_columns.issubset(df_header.columns):
+                return "RBC"
+        except:
+            pass
+
+        # Try reading first row of CIBC (no headers)
+        try:
+            df_first_row = pd.read_csv(
+                file_path,
+                nrows=1,
+                header=None,
+                quoting=csv.QUOTE_MINIMAL,
+                skipinitialspace=True,
+            )
+
+            # CIBC files have 5 columns: Date, Description, Debit, Credit, Card Number
+            if (len(df_first_row.columns) == 5 and
+                pd.to_datetime(df_first_row.iloc[0, 0], format='%Y-%m-%d') and
+                '*' in str(df_first_row.iloc[0, 4])):  # Check for asterisks in card number
+                return "CIBC"
+        except:
+            pass
 
         return None
 
@@ -75,6 +97,25 @@ class TransactionProcessor:
 
         return result
 
+    def _read_and_process_cibc(self, file_path):
+        df = pd.read_csv(
+            file_path,
+            header=None,
+            names=['Date', 'Description', 'Debit', 'Credit', 'Card'],
+            index_col=False,
+            quoting=csv.QUOTE_MINIMAL,
+            skipinitialspace=True,
+        )
+
+        # Convert Debit/Credit to Amount (Debit is negative, Credit is positive)
+        df['Amount'] = df['Credit'].fillna(0) - df['Debit'].fillna(0)
+        df['Description'] = df['Description'].str.strip()
+        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+        result = df[['Date', 'Description', 'Amount']].copy()
+        result = self._filter_internal_transfers(result)
+
+        return result
+
     def read_and_process(self, file_path):
         """Main interface to read and process bank transaction files."""
         bank_format = self._detect_bank_format(file_path)
@@ -83,8 +124,9 @@ class TransactionProcessor:
         df = None
         if bank_format == "RBC":
             df = self._read_and_process_rbc(file_path)
-
-        if df is None:
+        elif bank_format == "CIBC":
+            df = self._read_and_process_cibc(file_path)
+        else:
             raise UnsupportedBankError("This file format is not supported yet.")
 
         df['Owner'] = owner
