@@ -95,7 +95,8 @@ class TransactionProcessor:
         df['Description'] = df['Description'].str.strip()
         df['Date'] = pd.to_datetime(df['Transaction Date']).dt.strftime('%Y-%m-%d')
         df['Amount'] = df['CAD$']
-        result = df[['Date', 'Description', 'Amount']].copy()
+        df['Currency'] = 'CAD'
+        result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
         result = self._filter_internal_transfers(result)
 
         return result
@@ -114,7 +115,8 @@ class TransactionProcessor:
         df['Amount'] = df['Credit'].fillna(0) - df['Debit'].fillna(0)
         df['Description'] = df['Description'].str.strip()
         df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-        result = df[['Date', 'Description', 'Amount']].copy()
+        df['Currency'] = 'CAD'
+        result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
         result = self._filter_internal_transfers(result)
 
         return result
@@ -151,7 +153,7 @@ def main():
         try:
             transactions = processor.read_and_process(file_path)
             all_transactions.append(transactions)
-        except Exception as e:
+        except UnsupportedBankError as e:
             print(f"Error processing {file_path}: {e}")
             continue
 
@@ -177,7 +179,7 @@ def main():
             print("Error: Month must be in YYYY-MM format (e.g., 2024-01)")
             return
 
-    transactions = transactions[['Date', 'Owner', 'Institution', 'Description', 'Amount']]
+    transactions = transactions[['Date', 'Owner', 'Institution', 'Description', 'Amount', 'Currency']]
     transactions = transactions.sort_values('Date', ascending=False)
 
     owners = '_'.join(sorted([owner.lower() for owner in transactions['Owner'].unique()]))
