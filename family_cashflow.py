@@ -182,7 +182,6 @@ class TransactionProcessor:
         start_date = min(dates) - timedelta(days=7)
         end_date = max(dates) + timedelta(days=1)
 
-        # Get unique currencies from both source and target
         currencies = set(df['Source currency'].unique()) | set(df['Target currency'].unique())
         exchange_rates = self._get_exchange_rates(start_date, end_date, currencies)
 
@@ -200,14 +199,12 @@ class TransactionProcessor:
             rate = exchange_rates[closest_date][target_currency]
             return target_amount * rate
 
-        # Process amounts and descriptions
         df['Amount'] = df.apply(convert_amount, axis=1)
         # Make outgoing transactions negative
         df.loc[df['Direction'] == 'OUT', 'Amount'] *= -1
         df['Description'] = df['Source name'] + ' → ' + df['Target name']
         df['Currency'] = 'CAD'
 
-        # Select and return relevant columns
         result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
         return result
 
