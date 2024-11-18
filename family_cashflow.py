@@ -263,8 +263,7 @@ def main():
     transactions = transactions[['Date', 'Owner', 'Institution', 'Description', 'Amount', 'Currency', 'Category']]
     transactions = transactions.sort_values('Date', ascending=True)
 
-    owners = '_'.join(sorted([owner.lower() for owner in transactions['Owner'].unique()]))
-    output_filename = f"{owners}_{'all' if not args.month else args.month}_processed_family_cashflow.csv"
+    output_filename = f"{'all' if not args.month else args.month}_family_cashflow.csv"
     output_path = Path(args.file_paths[0]).parent.joinpath(output_filename)
     transactions.to_csv(output_path, index=False)
 
