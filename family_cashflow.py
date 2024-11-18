@@ -52,44 +52,38 @@ class TransactionProcessor:
     def _detect_bank_format(self, file_path):
         """Detect the bank format based on CSV structure."""
         # Try reading as RBC or Wise (with headers)
-        try:
-            df_header = pd.read_csv(
-                file_path,
-                nrows=0,
-                index_col=False,
-                quoting=csv.QUOTE_MINIMAL,
-                skipinitialspace=True,
-            )
+        df_header = pd.read_csv(
+            file_path,
+            nrows=0,
+            index_col=False,
+            quoting=csv.QUOTE_MINIMAL,
+            skipinitialspace=True,
+        )
 
-            wise_columns = {"ID", "Status", "Direction", "Source amount (after fees)", "Target amount (after fees)"}
-            if wise_columns.issubset(df_header.columns):
-                return "WISE"
+        wise_columns = {"ID", "Status", "Direction", "Source amount (after fees)", "Target amount (after fees)"}
+        if wise_columns.issubset(df_header.columns):
+            return "WISE"
 
-            rbc_columns = {"Description 1", "Description 2", "Transaction Date", "CAD$"}
-            if rbc_columns.issubset(df_header.columns):
-                return "RBC"
-        except:
-            pass
+        rbc_columns = {"Description 1", "Description 2", "Transaction Date", "CAD$"}
+        if rbc_columns.issubset(df_header.columns):
+            return "RBC"
 
         # Try reading first row of CIBC (no headers)
-        try:
-            df_first_row = pd.read_csv(
-                file_path,
-                nrows=1,
-                header=None,
-                quoting=csv.QUOTE_MINIMAL,
-                skipinitialspace=True,
-            )
+        df_first_row = pd.read_csv(
+            file_path,
+            nrows=1,
+            header=None,
+            quoting=csv.QUOTE_MINIMAL,
+            skipinitialspace=True,
+        )
 
-            # CIBC files have 5 columns: Date, Description, Debit, Credit, Card Number
-            if (len(df_first_row.columns) == 5 and
-                pd.to_datetime(df_first_row.iloc[0, 0], format='%Y-%m-%d') and
-                '*' in str(df_first_row.iloc[0, 4])):  # Check for asterisks in card number
-                return "CIBC"
-        except:
-            pass
+        # CIBC files have 5 columns: Date, Description, Debit, Credit, Card Number
+        if (len(df_first_row.columns) == 5 and
+            pd.to_datetime(df_first_row.iloc[0, 0], format='%Y-%m-%d') and
+            '*' in str(df_first_row.iloc[0, 4])):  # Check for asterisks in card number
+            return "CIBC"
 
-        return None
+        raise UnsupportedBankError(f"Could not detect bank format for file: {file_path}")
 
     def _read_and_process_rbc(self, file_path):
         df = pd.read_csv(
@@ -141,31 +135,32 @@ class TransactionProcessor:
             'order_dir': 'asc'
         }
 
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
 
-            rates = {}
-            for obs in data['observations']:
-                date = obs['d']
-                rates[date] = {
-                    curr: float(obs[f'FX{curr}CAD']['v'])
-                    for curr in currencies
-                    if f'FX{curr}CAD' in obs
-                }
-            return rates
-        except Exception as e:
-            print(f"Warning: Failed to fetch exchange rates: {e}")
-            return {}
+        assert 'observations' in data, "Invalid response from Bank of Canada API"
+        assert len(data['observations']) > 0, "No exchange rate data available for the specified period"
+
+        rates = {}
+        for obs in data['observations']:
+            date = obs['d']
+            rates[date] = {}
+            for curr in currencies:
+                fx_code = f'FX{curr}CAD'
+                assert fx_code in obs, f"Missing exchange rate for {curr} on {date}"
+                rates[date][curr] = float(obs[fx_code]['v'])
+
+        return rates
 
     def _find_closest_previous_date(self, date, exchange_rates):
         """Find the closest previous date in exchange_rates."""
-        if not exchange_rates:
-            return None
-
+        assert exchange_rates, "Exchange rates dictionary cannot be empty"
+        
         previous_dates = [d for d in exchange_rates if d <= date]
-        return max(previous_dates) if previous_dates else None
+        assert previous_dates, f"No exchange rates found for or before date {date}"
+        
+        return max(previous_dates)
 
     def _read_and_process_wise(self, file_path):
         """Process Wise transaction history CSV file."""
@@ -242,16 +237,10 @@ def main():
     all_transactions = []
 
     for file_path in args.file_paths:
-        try:
-            transactions = processor.read_and_process(file_path)
-            all_transactions.append(transactions)
-        except UnsupportedBankError as e:
-            print(f"Error processing {file_path}: {e}")
-            continue
+        transactions = processor.read_and_process(file_path)
+        all_transactions.append(transactions)
 
-    if not all_transactions:
-        print("No transactions were successfully processed")
-        return
+    assert all_transactions, "No transactions were processed"
 
     transactions = pd.concat(all_transactions, ignore_index=True)
 
