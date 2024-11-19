@@ -156,10 +156,10 @@ class TransactionProcessor:
     def _find_closest_previous_date(self, date, exchange_rates):
         """Find the closest previous date in exchange_rates."""
         assert exchange_rates, "Exchange rates dictionary cannot be empty"
-        
+
         previous_dates = [d for d in exchange_rates if d <= date]
         assert previous_dates, f"No exchange rates found for or before date {date}"
-        
+
         return max(previous_dates)
 
     def _read_and_process_wise(self, file_path):
@@ -177,29 +177,74 @@ class TransactionProcessor:
         end_date = max(dates) + timedelta(days=1)
 
         currencies = set(df['Source currency'].unique()) | set(df['Target currency'].unique())
+
+        if 'Source fee currency' in df.columns:
+            currencies.update(df['Source fee currency'].dropna().unique())
+        if 'Target fee currency' in df.columns:
+            currencies.update(df['Target fee currency'].dropna().unique())
+
         exchange_rates = self._get_exchange_rates(start_date, end_date, currencies)
 
-        def convert_amount(row):
-            target_currency = row['Target currency']
-            target_amount = row['Target amount (after fees)']
-            if target_currency == 'CAD':
-                return target_amount
+        def convert_to_cad(amount, currency, date):
+            if pd.isna(amount) or amount == 0:
+                return 0
+            if currency == 'CAD':
+                return amount
+            closest_date = self._find_closest_previous_date(date, exchange_rates)
+            assert closest_date is not None and currency in exchange_rates[closest_date], \
+                f"CAD exchange rate not found for {currency} on {date}. Closest date: {closest_date}"
+            rate = exchange_rates[closest_date][currency]
+            return amount * rate
 
-            closest_date = self._find_closest_previous_date(row['Date'], exchange_rates)
-
-            assert closest_date is not None and target_currency in exchange_rates[closest_date], \
-              f"CAD exchange rate not found for {target_currency} on {row['Date']}. Closest date: {closest_date}"
-
-            rate = exchange_rates[closest_date][target_currency]
-            return target_amount * rate
-
-        df['Amount'] = df.apply(convert_amount, axis=1)
+        # Process main transactions
+        df['Amount'] = df.apply(lambda row: convert_to_cad(
+            row['Target amount (after fees)'],
+            row['Target currency'],
+            row['Date']
+        ), axis=1)
         # Make outgoing transactions negative
         df.loc[df['Direction'] == 'OUT', 'Amount'] *= -1
         df['Description'] = df['Source name'] + ' → ' + df['Target name']
         df['Currency'] = 'CAD'
 
-        result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
+        main_transactions = df[['Date', 'Description', 'Currency', 'Amount']].copy()
+
+        # Process fees
+        fee_rows = []
+        for _, row in df.iterrows():
+            source_fee = convert_to_cad(
+                row['Source fee amount'],
+                row['Source fee currency'],
+                row['Date']
+            )
+            if source_fee != 0:
+                fee_rows.append({
+                    'Date': row['Date'],
+                    'Description': 'Wise fee',
+                    'Currency': 'CAD',
+                    'Amount': -abs(source_fee)
+                })
+
+            target_fee = convert_to_cad(
+                row['Target fee amount'],
+                row['Target fee currency'],
+                row['Date']
+            )
+            if target_fee != 0:
+                fee_rows.append({
+                    'Date': row['Date'],
+                    'Description': 'Wise fee',
+                    'Currency': 'CAD',
+                    'Amount': -abs(target_fee)
+                })
+
+        if fee_rows:
+            fee_df = pd.DataFrame(fee_rows)
+            result = pd.concat([main_transactions, fee_df], ignore_index=True)
+            result = result.sort_values('Date', ascending=True)
+        else:
+            result = main_transactions
+
         return result
 
     def read_and_process(self, file_path):
