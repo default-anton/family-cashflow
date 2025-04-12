@@ -51,7 +51,7 @@ class TransactionProcessor:
 
     def _detect_bank_format(self, file_path):
         """Detect the bank format based on CSV structure."""
-        # Try reading as RBC or Wise (with headers)
+        # Try reading as RBC, Wise, or Walmart (with headers)
         df_header = pd.read_csv(
             file_path,
             nrows=0,
@@ -67,6 +67,10 @@ class TransactionProcessor:
         rbc_columns = {"Description 1", "Description 2", "Transaction Date", "CAD$"}
         if rbc_columns.issubset(df_header.columns):
             return "RBC"
+
+        walmart_columns = {"Date", "Posted Date", "Reference Number", "Merchant Name", "Amount", "Name on Card"}
+        if walmart_columns.issubset(df_header.columns):
+            return "WALMART"
 
         # Try reading first row of CIBC (no headers)
         df_first_row = pd.read_csv(
@@ -247,6 +251,36 @@ class TransactionProcessor:
 
         return result
 
+    def _read_and_process_walmart(self, file_path):
+        """Process Walmart credit card transaction CSV file."""
+        df = pd.read_csv(
+            file_path,
+            index_col=False,
+            quoting=csv.QUOTE_MINIMAL,
+            skipinitialspace=True
+        )
+
+        # Convert date and clean up amount
+        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+
+        # Clean up amount - remove $ and convert to float
+        # All transactions are purchases, so make them negative
+        df['Amount'] = df['Amount'].str.replace('$', '', regex=False).astype(float) * -1
+
+        # Create description from merchant information
+        df['Description'] = df['Merchant Name'].fillna('')
+        df['Description'] = df.apply(
+            lambda row: f"{row['Description']} - {row['Merchant City']}, {row['Merchant State/Province']}"
+            if not pd.isna(row['Merchant City']) and not pd.isna(row['Merchant State/Province'])
+            else row['Description'],
+            axis=1
+        )
+
+        df['Currency'] = 'CAD'
+        result = df[['Date', 'Description', 'Currency', 'Amount']].copy()
+
+        return result
+
     def read_and_process(self, file_path):
         """Main interface to read and process bank transaction files."""
         bank_format = self._detect_bank_format(file_path)
@@ -259,6 +293,8 @@ class TransactionProcessor:
             df = self._read_and_process_cibc(file_path)
         elif bank_format == "WISE":
             df = self._read_and_process_wise(file_path)
+        elif bank_format == "WALMART":
+            df = self._read_and_process_walmart(file_path)
         else:
             raise UnsupportedBankError("This file format is not supported yet.")
 
