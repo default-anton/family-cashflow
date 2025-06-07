@@ -265,7 +265,7 @@ class TransactionProcessor:
 
         # Clean up amount - remove $ and convert to float
         # All transactions are purchases, so make them negative
-        df['Amount'] = df['Amount'].str.replace('$', '', regex=False).astype(float) * -1
+        df['Amount'] = df['Amount'].str.replace('$', '', regex=False).str.replace(',', '').astype(float) * -1
 
         # Create description from merchant information
         df['Description'] = df['Merchant Name'].fillna('')
